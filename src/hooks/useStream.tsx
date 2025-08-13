@@ -15,6 +15,7 @@ type UseStreamReturn = {
   pause: () => void;
   resume: () => void;
   goLive: () => void;
+  replay: () => void;
   frameByFrame: (direction: Direction) => void;
   setVideoStates: (vState: VideoStates) => void;
   changePlaybackRate: (rate: number, direction?: Direction) => void;
@@ -39,6 +40,8 @@ export interface ConnOption {
   eventId?: number;
   streamType?: 0 | 1;
   retry?: boolean;
+  smallClip?: boolean;
+  seekTimestamp?: number;
 }
 
 interface ObjectInfo {
@@ -75,6 +78,7 @@ export interface VideoStates {
   isFrameByFrame: boolean;
   loading: boolean;
   statusText: string | null;
+  replay: boolean;
 }
 
 const initVideoState = {
@@ -85,6 +89,7 @@ const initVideoState = {
   isFrameByFrame: false,
   loading: false,
   statusText: null,
+  replay: false,
 };
 
 export function useStream(
@@ -117,6 +122,8 @@ export function useStream(
     null
   );
   const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoReplayTimeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timedOutRef = useRef<boolean>(false);
 
   const app = 0;
   const cloudIp = "<videoneticsAddr>";
@@ -158,6 +165,13 @@ export function useStream(
     if (buffered && video && buffered.length > 0) {
       const start = buffered.start(0);
       const current = video.currentTime;
+      // added for small clip
+      if (optionRef.current.smallClip){
+        const end = buffered.end(buffered.length - 1);
+        if (optionRef.current.endTimestamp && (startTimeRef.current + (end * 1000)) > optionRef.current.endTimestamp)
+          softStop();
+        return;
+      }
 
       if (sourceBufferRef.current && current - start > bufferThreshold) {
         try {
@@ -224,9 +238,13 @@ export function useStream(
   }
 
   function cleanupRefs() {
+    clrAutoReplay();
+    // clrRetryInterval();
+    clrTimeout();
     frameQueueRef.current = [];
     startTimeRef.current = 0;
     metaDataRef.current = [];
+    autoPausedRef.current = false;
   }
 
   // playback rate change handler
@@ -246,11 +264,14 @@ export function useStream(
   const skip10Sec = useCallback((direction: Direction) => {
     if (videoStateRef.current.isLive) return;
     const video = videoRef.current;
-    if (video) {
+    const buffered = sourceBufferRef.current?.buffered;
+    if (video && buffered && buffered?.length > 0) {
       const offset = 10;
+      const start = buffered.start(0);
+      const end = buffered.end(buffered.length - 1);
       let currentTime = video.currentTime;
       currentTime =
-        direction === "forward" ? currentTime + offset : currentTime - offset;
+        direction === "forward" ? Math.min(currentTime + offset, end) : Math.max(currentTime - offset, start);
       video.currentTime = Math.max(0, currentTime);
     }
   }, []);
@@ -261,11 +282,14 @@ export function useStream(
     videoStateRef.current.isPlaying &&
       setVideoStates((prevState) => ({ ...prevState, isPlaying: false }));
     const video = videoRef.current;
-    if (video) {
+    const buffered = sourceBufferRef.current?.buffered;
+    if (video && buffered && buffered.length > 0) {
       const offset = 1 / fps;
+      const start = buffered.start(0);
+      const end = buffered.end(buffered.length - 1);
       let currentTime = video.currentTime;
       currentTime =
-        direction === "forward" ? currentTime + offset : currentTime - offset;
+        direction === "forward" ? Math.min(currentTime + offset, end) : Math.max(currentTime - offset, start);
       video.currentTime = Math.max(0, currentTime);
     }
   }, []);
@@ -276,7 +300,7 @@ export function useStream(
       const option: ConnOption = {
         siteId: optionRef.current.siteId,
         channelId: optionRef.current.channelId,
-        timestamp: Date.now(),
+        timestamp: Date.now() - 5000,
         streamType: optionRef.current.streamType || 0,
       };
       start(option);
@@ -291,14 +315,56 @@ export function useStream(
 
   // seek handler
   const seek = useCallback((timestamp: number) => {
-    const option: ConnOption = {
-      siteId: optionRef.current.siteId,
-      channelId: optionRef.current.channelId,
-      timestamp,
-      streamType: optionRef.current.streamType,
-    };
-    start(option);
+    clrAutoReplay();
+    // for small clip
+    if (optionRef.current.smallClip){
+      const buffered = sourceBufferRef.current?.buffered;
+      if (videoRef.current && buffered && buffered.length > 0){
+        const start = buffered.start(0);
+        const end = buffered.end(buffered.length - 1);
+        const toBeTime = (timestamp - startTimeRef.current) / 1000;
+        videoRef.current.currentTime = Math.max(start, Math.min(toBeTime, end));
+        setVideoStates(prevState => ({...prevState, isPlaying: false, replay: false}));
+      }
+      return;
+    }
+    // for regular condition
+    const {retry, smallClip, ...rest} = optionRef.current;
+    rest.seekTimestamp = timestamp;
+    start(rest);
   }, []);
+
+  // replay handler
+  const replay = useCallback(() => {
+    clrAutoReplay();
+    // for small clip
+    if (optionRef.current.smallClip){
+      const buffered = sourceBufferRef.current?.buffered;
+      if (videoRef.current && buffered && buffered.length > 0){
+        const start = buffered.start(0);
+        videoRef.current.currentTime = Math.max(start, 0);
+        setVideoStates(prevState => ({...prevState, isPlaying: true, replay: false}));
+      }
+      return;
+    }
+    // for normal clip
+    const {retry, smallClip, ...rest} = optionRef.current;
+    start(rest);
+  }, [])
+
+  // clear auto replay
+  const clrAutoReplay = useCallback(() => {
+    if (autoReplayTimeoutIdRef.current){
+      clearTimeout(autoReplayTimeoutIdRef.current);
+      autoReplayTimeoutIdRef.current = null;
+    }
+  }, [])
+
+  // set auto replay handler
+  const setAutoReplay = useCallback(() => {
+    clrAutoReplay();
+    autoReplayTimeoutIdRef.current = setTimeout(replay, 10000);
+  }, [])
 
   // go live handler
   const goLive = useCallback(() => {
@@ -330,7 +396,7 @@ export function useStream(
   };
 
   // handle resume pause
-  let autoPaused = useRef<boolean>(false);
+  let autoPausedRef = useRef<boolean>(false);
   const handleAutoPause = useCallback(() => {
     const buffered = sourceBufferRef.current?.buffered;
     const video = videoRef.current;
@@ -338,21 +404,22 @@ export function useStream(
       const current = video.currentTime;
       const end = buffered.end(buffered.length - 1);
       if (end - current > bufferThreshold) {
-        !autoPaused.current && ((autoPaused.current = true), pauseStream());
+        !autoPausedRef.current && ((autoPausedRef.current = true), pauseStream());
       } else if (end - current < bufferThreshold * (2 / 3)) {
-        autoPaused.current && ((autoPaused.current = false), resumeStream());
+        autoPausedRef.current && ((autoPausedRef.current = false), resumeStream());
       }
     }
   }, []);
 
   const handleAutoResume = useCallback(() => {
+    if (optionRef.current.smallClip) return;
     const buffered = sourceBufferRef.current?.buffered;
     const video = videoRef.current;
     if (buffered && video && buffered.length > 0) {
       const current = video.currentTime;
       const end = buffered.end(buffered.length - 1);
       if (end - current < bufferThreshold * (2 / 3)) {
-        autoPaused.current && ((autoPaused.current = false), resumeStream());
+        autoPausedRef.current && ((autoPausedRef.current = false), resumeStream());
       }
     }
   }, []);
@@ -360,6 +427,10 @@ export function useStream(
   // update current frame metadata handler
   const updateFrameMeta = useCallback(
     (now: DOMHighResTimeStamp, meta: VideoFrameCallbackMetadata) => {
+      // add listener for timeout
+      clrTimeout();
+      timeoutIdRef.current = setTimeout(handleTimeOut, 20000);
+
       const currentVideoTime = Math.ceil(meta.mediaTime * 1000);
       const currentPlayTime = startTimeRef.current + currentVideoTime;
       const metaData = metaDataRef.current.reduce(
@@ -378,10 +449,21 @@ export function useStream(
         console.log("$$$$$===== meta diff: ", diff);
       }
       videoRef.current?.requestVideoFrameCallback(updateFrameMeta);
-      if (metaData)
-        metaDataRef.current = metaDataRef.current.slice(
-          Math.max(0, (metaData.index || 0) - 50)
-        );
+      if (metaData){
+        // not remove metadata for small clip
+        if (!optionRef.current.smallClip){
+          metaDataRef.current = metaDataRef.current.slice(
+            Math.max(0, (metaData.index || 0) - 50)
+          );
+        }
+        // pause the video on end time reach
+        if (optionRef.current.endTimestamp && metaData.timeStamp >= optionRef.current.endTimestamp) {
+          console.log("$$$$$===== set auto")
+          pause();
+          setVideoStates(prevState => ({...prevState, replay: true}));
+          setAutoReplay();
+        }       
+      }
     },
     []
   );
@@ -389,7 +471,7 @@ export function useStream(
   // handle video on loaded
   const handleVideoLoaded = useCallback(() => {
     clrRetryInterval();
-    clrTimeout();
+    clrAutoReplay();
     retryCountRef.current = 0;
     retryingRef.current = false;
 
@@ -406,28 +488,25 @@ export function useStream(
   }, [updateFrameMeta]);
 
   // video error handler function
-  const handleError = useCallback(() => {
+  const handleError = useCallback((e?: any) => {
     if (retryCountRef.current === 3)
       setVideoStates((prevState) => ({ ...prevState, statusText: "failed" }));
-    if (retryingRef.current || retryCountRef.current >= 3) return;
+    if (retryingRef.current || retryCountRef.current >= 3 || timedOutRef.current) return;
     retryingRef.current = true;
-    console.log("$$$$$===== video error occurred");
-    if (timeoutIdRef.current) {
-      clearTimeout(timeoutIdRef.current);
-      timeoutIdRef.current = null;
-    }
-    const option: ConnOption = {
-      siteId: optionRef.current.siteId,
-      channelId: optionRef.current.channelId,
-      streamType: optionRef.current.streamType || 0,
-      timestamp: videoStateRef.current.isLive ? 0 : lastPlayTimeRef.current,
-      retry: true,
-    };
-    retryIntervalIdRef.current = setInterval(() => start(option), 5000);
+    console.log("$$$$$===== video error occurred", e);
+    clrTimeout();
+    let {smallClip, ...rest} = optionRef.current;
+    rest.retry = true;
+    rest.timestamp = videoStateRef.current.isLive ? 0 : (optionRef.current.smallClip ? optionRef.current.timestamp : (lastPlayTimeRef.current || optionRef.current.timestamp));
+    retryIntervalIdRef.current = setInterval(() => start(rest), 5000);
   }, []);
 
   // timeout error handler function
   const handleTimeOut = useCallback(() => {
+    if (!videoStateRef.current.isPlaying) return;
+    console.log("$$$$$===== timeout")
+
+    timedOutRef.current = true;
     setVideoStates((prevState) => ({
       ...prevState,
       statusText: "failed",
@@ -446,6 +525,7 @@ export function useStream(
 
   // clear retry interval
   const clrRetryInterval = useCallback(() => {
+    console.log("$$$$$===== clear interval")
     if (retryIntervalIdRef.current) {
       clearInterval(retryIntervalIdRef.current);
       retryIntervalIdRef.current = null;
@@ -455,10 +535,12 @@ export function useStream(
   // create connection string
   const prepareConnectionString = useCallback(async (option: ConnOption) => {
     // const BASE_STREAM_URL = "ws://172.16.1.16:8083";
-    // const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
+    // const BASE_STREAM_URL = "wss://vsaasstreaming4.videonetics.com";
     // const BASE_STREAM_URL = "ws://172.16.2.143:8083";
     // const BASE_STREAM_URL = "ws://172.16.1.144:8083";
-    const BASE_STREAM_URL = "ws://127.0.0.1:8083";
+    const BASE_STREAM_URL = "ws://172.16.3.46:8083";
+
+    const TEST_MODE = process.env.NODE_ENV === "development";
 
     let baseWsURL: string = "";
     let isLive = 1;
@@ -497,11 +579,11 @@ export function useStream(
       if (!streamUrl) {
         if (timestamp === 0) {
           const apiURL: string = `/v-apiserver/REST/${siteId}/startlive`;
-          // response = await axios.post(apiURL, payload);
+          response = await axios.post(apiURL, payload);
         } else if (timestamp && timestamp > 0) {
           const apiURL: string = `/v-apiserver/REST/${siteId}/startarchive`;
           payload.starttimestamp = timestamp;
-          // response = await axios.post(apiURL, payload);
+          response = await axios.post(apiURL, payload);
         }
       }
       const host =
@@ -552,29 +634,42 @@ export function useStream(
       "&src=" +
       encodeURIComponent(src);
 
-    // wsUrl = `${baseWsURL}` + wsUrl;
-    wsUrl = `${BASE_STREAM_URL}` + wsUrl;
+    wsUrl = `${TEST_MODE ? BASE_STREAM_URL : baseWsURL}` + wsUrl;
     return wsUrl;
   }, []);
+
+  // soft stop
+  const softStop = useCallback(() => {
+    if (wsRef.current){
+      wsRef.current.close(4000, "soft close from client");
+    }
+  }, [])
 
   // handle start function
   const start = useCallback(
     async (option: ConnOption) => {
-      optionRef.current = option;
+      console.log("$$$$$===== start =====$$$$$", option)
+      const { seekTimestamp, ...rest } = option;
+      optionRef.current = rest;
       if (option.retry) {
         retryCountRef.current++;
       } else {
         retryCountRef.current = 0;
         retryingRef.current = false;
+        clrRetryInterval();
       }
 
       if (retryCountRef.current >= 3) clrRetryInterval();
+      clrAutoReplay();
 
-      // add listener for timeout
-      clrTimeout();
-      timeoutIdRef.current = setTimeout(handleTimeOut, 20000);
+      timedOutRef.current = false;
 
-      let isLive = !((option.timestamp || 0) > 0);
+      if (option.endTimestamp && ((option.timestamp || 0) - option.endTimestamp <= 60000)){
+        optionRef.current.smallClip = true;
+        console.log("$$$$$===== has end =====$$$$$", option.endTimestamp - (option.timestamp || 0))
+      }
+
+      let isLive = !((seekTimestamp || option.timestamp || 0) > 0);
       setVideoStates((prevState) => ({
         ...prevState,
         loading: true,
@@ -584,16 +679,22 @@ export function useStream(
         direction: "forward",
         playbackRate: isLive ? 1 : videoStateRef.current.playbackRate,
         statusText: "loading",
+        replay: false,
       }));
       stop();
+      // add listener for timeout
+      clrTimeout();
+      timeoutIdRef.current = setTimeout(handleTimeOut, 20000);
+
       startTimeRef.current = 0;
       metaDataRef.current = [];
-      const connectionString = await prepareConnectionString(option);
+
+      const connectionString = await prepareConnectionString({...option, timestamp: seekTimestamp || option.timestamp});
       if (!connectionString) {
         handleError();
         return;
       }
-      // if (wsRef.current) return; // Already started
+      
       const mediaSource = new MediaSource();
       mediaSourceRef.current = mediaSource;
       if (videoRef.current) {
@@ -655,9 +756,8 @@ export function useStream(
                 sourceBuffer = mediaSource.addSourceBuffer(codec);
                 sourceBufferRef.current = sourceBuffer;
                 sourceBuffer.addEventListener("updateend", () => {
-                  !isLive && handleAutoPause();
+                  !isLive && !optionRef.current.smallClip && handleAutoPause();
                   processQueue();
-                  // cleanupBuffer();
                   isLive && seekVideoToCurrentTime();
                   monitorBuffUsage();
                 });
@@ -671,6 +771,7 @@ export function useStream(
             }
             return;
           } else if (data.type === 'error'){
+            timedOutRef.current = true;
             setVideoStates(prevState => ({...prevState, statusText: "failed", loading: false}));
             stop();
             return;
@@ -706,7 +807,7 @@ export function useStream(
         if (wsRef.current === this) {
           wsRef.current = null;
           stopHeartBit();
-          if (e.code !== 4000) handleError();
+          if (e.code !== 4000) handleError(e);
           console.log("$$$$$ WebSocket connection closed");
         }
       };
@@ -796,6 +897,7 @@ export function useStream(
       console.log("$$$$$===== removed");
       clrRetryInterval();
       clrTimeout();
+      clrAutoReplay();
     };
   }, []);
 
@@ -805,6 +907,7 @@ export function useStream(
     pause,
     resume,
     goLive,
+    replay,
     frameByFrame,
     setVideoStates,
     changePlaybackRate,
