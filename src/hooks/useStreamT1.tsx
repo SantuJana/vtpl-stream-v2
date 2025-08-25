@@ -1,4 +1,4 @@
-import React, { RefObject, useCallback, useRef } from "react";
+import React, { RefObject, useCallback, useEffect, useRef } from "react";
 import { v4 } from "uuid";
 
 export interface ConnOption {
@@ -23,6 +23,10 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
     const wsRef = useRef<WebSocket | null>(null);
     const sourceBufferRef = useRef<SourceBuffer | null>(null);
     const frameQueueRef = useRef<Array<BufferSource>>([]);
+    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const runtimeCheckingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const optionRef = useRef<ConnOption>({ siteId: 0, channelId: 0 });
+    const lastFrameTimeRef = useRef<number | null>(null);
 
   const app = 0;
   const cloudIp = "<videoneticsAddr>";
@@ -56,6 +60,7 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
 
 
   function monitorBuffUsage() {
+    if (sourceBufferRef.current?.updating) return;
     const buffered = sourceBufferRef.current?.buffered;
     const video = videoRef.current;
     if (buffered && video && buffered.length > 0) {
@@ -74,6 +79,52 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
       }
     }
   }
+
+  const reconnect = useCallback(() => {
+    start(optionRef.current);
+  }, [])
+
+  const clearTimeoutCheck = useCallback(() => {
+    if (timeoutRef.current){
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, [])
+
+  const clearRuntimeCheck = useCallback(() => {
+    if (runtimeCheckingIntervalRef.current){
+      clearInterval(runtimeCheckingIntervalRef.current);
+      runtimeCheckingIntervalRef.current = null;
+    }
+  }, [])
+
+  const addRuntimeChecking = useCallback(() => {
+    clearRuntimeCheck();
+    runtimeCheckingIntervalRef.current = setInterval(() =>{
+      const video = videoRef.current;
+      if (video){
+        const currentTime = video.currentTime;
+        if (lastFrameTimeRef.current && lastFrameTimeRef.current >= currentTime){
+          reconnect();
+          return;
+        }
+        lastFrameTimeRef.current = currentTime;
+        const buffered = sourceBufferRef.current?.buffered;
+        if (buffered && buffered.length > 0){
+          const end = buffered.end(buffered.length - 1);
+          if (end - currentTime > 3){
+            video.currentTime = end;
+          }
+        }
+      }
+    }, 3000);
+  }, [clearRuntimeCheck])
+
+  const handleOnLoadedData = useCallback(() => {
+    lastFrameTimeRef.current = null;
+    clearTimeoutCheck();
+    addRuntimeChecking();
+  }, [cleanupRefs, clearRuntimeCheck])
 
   function cleanupWebSocket() {
     if (wsRef.current) {
@@ -102,6 +153,8 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
   }
 
   const stop = useCallback(() => {
+    clearRuntimeCheck();
+    clearTimeoutCheck();
     cleanupWebSocket();
     cleanupVideo();
     cleanupSourceBuffer();
@@ -157,6 +210,8 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
   }, []);
 
   const start = useCallback((option: ConnOption) => {
+    stop();
+    optionRef.current = option;
     const wsUrl = prepareConnectionString(option);
 
     const mediaSource = new MediaSource();
@@ -167,6 +222,12 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
 
     let codec: string | null = null;
     let sourceBuffer: SourceBuffer | null = null;
+
+    // check for timeout
+    clearTimeoutCheck();
+    timeoutRef.current = setTimeout(() => {
+      reconnect();
+    }, 15000);
 
     wsRef.current = new WebSocket(wsUrl);
     wsRef.current.binaryType = "arraybuffer";
@@ -215,6 +276,19 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
         }
     };
   }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) {
+      video.addEventListener("loadeddata", handleOnLoadedData);
+    }
+
+    return () => {
+      if (video) {
+        video.removeEventListener("loadeddata", handleOnLoadedData);
+      }
+    };
+  }, [])
 
   return { stop, start };
 }
