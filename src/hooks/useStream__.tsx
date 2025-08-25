@@ -8,7 +8,6 @@ import {
   useMemo,
 } from "react";
 import { v4 as uuidv4 } from "uuid";
-import useBackwardSource from "./useBackwardSource";
 
 type UseStreamReturn = {
   start: (option: ConnOption) => void;
@@ -23,7 +22,7 @@ type UseStreamReturn = {
   skip10Sec: (direction: Direction) => void;
   seek: (timestamp: number) => void;
   startTimeRef: RefObject<number>;
-  metaDataRef: RefObject<FrameMetaData[]>;
+  metaDataRef: RefObject<{[key: number]: FrameMetaData}>;
   videoStates: VideoStates;
   currentFrameMetadata: FrameMetaData | null;
 };
@@ -96,7 +95,7 @@ const initVideoState = {
 export function useStream(
   videoRef: RefObject<HTMLVideoElement | null>
 ): UseStreamReturn {
-  const { loadPrevData } = useBackwardSource();
+  // Queue for incoming video frames
   const frameQueueRef = useRef<Array<BufferSource>>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const mediaSourceRef = useRef<MediaSource | null>(null);
@@ -105,7 +104,7 @@ export function useStream(
     ((this: MediaSource, ev: Event) => any) | null
   >(null);
   const startTimeRef = useRef<number>(0);
-  const metaDataRef = useRef<FrameMetaData[]>([]);
+  const metaDataRef = useRef<{[key: number]: FrameMetaData}>({});
   const heartBeatIntervalIdRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
@@ -125,14 +124,6 @@ export function useStream(
   const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplayTimeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timedOutRef = useRef<boolean>(false);
-  // Ref for backward play
-  const backFrameQueueRef = useRef<Array<BufferSource>>([]);
-  const backStartTimeRef = useRef<number>(0);
-  const backMetaDataRef = useRef<FrameMetaData[]>([]);
-  const resolveRef = useRef<(value?: unknown) => void>(null);
-  const rejectRef = useRef<() => void>(null);
-  const preFetchCalledRef = useRef<boolean>(false);
-  const waitingForPrevDataRef = useRef<boolean>(false);
 
   const app = 0;
   const cloudIp = "<videoneticsAddr>";
@@ -184,10 +175,15 @@ export function useStream(
 
       if (sourceBufferRef.current && current - start > bufferThreshold) {
         try {
+          const removeEnd = current - ((bufferThreshold * 2) / 3);
           sourceBufferRef.current.remove(
             start,
-            current - (bufferThreshold * 2) / 3
+            removeEnd
           );
+          Object.keys(metaDataRef.current).map((duration) => {
+            if (Number(duration) >= ((start - 1) * 1000) && Number(duration) <= (removeEnd * 1000))
+              delete metaDataRef.current[Number(duration)]
+          })
         } catch (error) {
           // console.error("$$$$==== Failed to remove used buffer");
         }
@@ -421,22 +417,9 @@ export function useStream(
   }, []);
 
   const handleAutoResume = useCallback(() => {
+    if (optionRef.current.smallClip) return;
     const buffered = sourceBufferRef.current?.buffered;
     const video = videoRef.current;
-    // on backward check for when to preload
-    if (videoStateRef.current.direction === "backward" && !preFetchCalledRef.current){
-      if (buffered && video && buffered.length > 0) {
-        const current = video.currentTime;
-        const start = buffered.start(0);
-        const diff = current - start;
-        console.log("$$$$$=====>>>>> diff ", diff);
-        diff <= 30 && fetchPrevData();
-      }
-      return;
-    }
-
-    if (optionRef.current.smallClip) return;
-
     if (buffered && video && buffered.length > 0) {
       const current = video.currentTime;
       const end = buffered.end(buffered.length - 1);
@@ -454,53 +437,14 @@ export function useStream(
       timeoutIdRef.current = setTimeout(handleTimeOut, 20000);
 
       const currentVideoTime = Math.ceil(meta.mediaTime * 1000);
-      const currentPlayTime = startTimeRef.current + currentVideoTime;
-      // const metaData = metaDataRef.current.reduce(
-      //   (nearest, item, index) => {
-      //     return Math.abs(item.timeStamp - currentPlayTime) >
-      //       Math.abs(nearest.timeStamp - currentPlayTime)
-      //       ? nearest
-      //       : { ...item, index };
-      //   },
-      //   { ...(metaDataRef.current[0] || {}), index: 0 }
-      // );
-      const metaDataIndex = metaDataRef.current.findIndex(item => item.timeStampEncoded == currentVideoTime);
+      const metaData = metaDataRef.current[currentVideoTime];
       videoRef.current?.requestVideoFrameCallback(updateFrameMeta);
-      if (metaDataIndex < 0){
-        console.log("$$$$$===== metaData not found =====$$$$$", currentVideoTime)
-        return;
-      }
-      const metaData = metaDataRef.current[metaDataIndex];
+      if (!metaData) return;
       setCurrentFrameMetadata(metaData);
       lastPlayTimeRef.current = metaData.timeStamp;
-      const diff = metaData.timeStamp - currentPlayTime;
-      // console.log("$$$$$===== meta : ", currentVideoTime, startTimeRef, diff);
-      if (diff > 100) {
-        // console.log("$$$$$===== meta diff: ", diff);
-        // if (diff >= 200){
-        //   startTimeRef.current+=diff;
-        // } else if (diff < 0 && Math.abs(diff) >= 500){
-        //   const buffered = sourceBufferRef.current?.buffered;
-        //   if (buffered && buffered.length > 0 && videoRef.current){
-        //     const end = buffered.end(buffered.length - 1);
-        //     const toBe = videoRef.current.currentTime + (Math.abs(diff) / 1000);
-        //     videoRef.current.currentTime = Math.min(end, toBe);
-        //   }
-        // }
-      }
       if (metaData){
-        // not remove metadata for small clip
-        if (!optionRef.current.smallClip){
-          // metaDataRef.current = metaDataRef.current.slice(
-          //   (metaData.index || 0) + 1
-          // );
-          metaDataRef.current = metaDataRef.current.slice(
-            Math.max(0, (metaDataIndex || 0) - 50)
-          );
-        }
         // pause the video on end time reach
         if (optionRef.current.endTimestamp && metaData.timeStamp >= optionRef.current.endTimestamp) {
-          console.log("$$$$$===== set auto")
           pause();
           setVideoStates(prevState => ({...prevState, replay: true}));
           setAutoReplay();
@@ -545,16 +489,16 @@ export function useStream(
 
   // timeout error handler function
   const handleTimeOut = useCallback(() => {
-    // if (!videoStateRef.current.isPlaying) return;
+    if (!videoStateRef.current.isPlaying) return;
     // console.log("$$$$$===== timeout")
 
-    // timedOutRef.current = true;
-    // setVideoStates((prevState) => ({
-    //   ...prevState,
-    //   statusText: "failed",
-    //   loading: false,
-    // }));
-    // stop();
+    timedOutRef.current = true;
+    setVideoStates((prevState) => ({
+      ...prevState,
+      statusText: "failed",
+      loading: false,
+    }));
+    stop();
   }, []);
 
   // clear timeout
@@ -567,7 +511,7 @@ export function useStream(
 
   // clear retry interval
   const clrRetryInterval = useCallback(() => {
-    console.log("$$$$$===== clear interval")
+    // console.log("$$$$$===== clear interval")
     if (retryIntervalIdRef.current) {
       clearInterval(retryIntervalIdRef.current);
       retryIntervalIdRef.current = null;
@@ -577,10 +521,10 @@ export function useStream(
   // create connection string
   const prepareConnectionString = useCallback(async (option: ConnOption) => {
     // const BASE_STREAM_URL = "ws://172.16.1.16:8083";
-    // const BASE_STREAM_URL = "wss://vsaasstreaming4.videonetics.com";
+    const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
     // const BASE_STREAM_URL = "ws://172.16.2.143:8083";
     // const BASE_STREAM_URL = "ws://172.16.1.144:8083";
-    const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
+    // const BASE_STREAM_URL = "ws://172.16.3.46:8083";
 
     const TEST_MODE = true;
 
@@ -666,7 +610,7 @@ export function useStream(
       sessionId;
 
     if (jobId && eventId) {
-      name = name + "/" + jobId + "/" + eventId;
+      name = name + "/" + (jobId || "-1") + "/" + eventId;
     }
 
     const src = "videonetics://" + cloudIp + "/" + name;
@@ -687,48 +631,6 @@ export function useStream(
     }
   }, [])
 
-  // process buffer queue
-  function processQueue() {
-    // console.log("$$$$$===== buffer processed 1 =====$$$$$")
-    if (!sourceBufferRef.current || sourceBufferRef.current.updating) return;
-    // console.log("$$$$$===== buffer processed 2 =====$$$$$")
-    const nextFrame = frameQueueRef.current.shift();
-    if (nextFrame) {
-      // console.log("$$$$$===== buffer processed 3 =====$$$$$")
-      if (nextFrame instanceof Blob) {
-        nextFrame.arrayBuffer().then((arrayBuffer) => {
-          if (sourceBufferRef.current) {
-            try {            console.log("$$$$$===== buffer processed =====$$$$$", frameQueueRef.current.length, resolveRef.current)
-
-              sourceBufferRef.current.appendBuffer(arrayBuffer);
-              // resolve when all frame pushed
-              if (frameQueueRef.current.length < 1 && resolveRef.current){
-                resolveRef.current();
-              }
-            } catch (err) {
-              console.log("$$$$$ Error appending buffer:", err);
-              rejectRef.current && rejectRef.current();
-            }
-          }
-        });
-      } else {
-        if (sourceBufferRef.current) {
-          // console.log("$$$$$===== buffer processed 4 =====$$$$$")
-          try {
-            console.log("$$$$$===== buffer processed =====$$$$$", frameQueueRef.current.length, resolveRef.current)
-            sourceBufferRef.current.appendBuffer(nextFrame);// resolve when all frame pushed
-            if (frameQueueRef.current.length < 1 && resolveRef.current){
-              resolveRef.current();
-            }
-          } catch (err) {
-            console.log("$$$$$ Error appending buffer:", err);
-            rejectRef.current && rejectRef.current();
-          }
-        }
-      }
-    }
-  }
-
   // handle start function
   const start = useCallback(
     async (option: ConnOption) => {
@@ -748,9 +650,9 @@ export function useStream(
 
       timedOutRef.current = false;
 
-      if (option.endTimestamp && ((option.timestamp || 0) - option.endTimestamp <= 60000)){
+      if (option.endTimestamp && (option.endTimestamp - (option.timestamp || 0) <= 60000)){
         optionRef.current.smallClip = true;
-        console.log("$$$$$===== has end =====$$$$$", option.endTimestamp - (option.timestamp || 0))
+        // console.log("$$$$$===== has end =====$$$$$", option.endTimestamp - (option.timestamp || 0))
       }
 
       let isLive = !((seekTimestamp || option.timestamp || 0) > 0);
@@ -788,6 +690,32 @@ export function useStream(
       let codec: string | null = null;
       let sourceBuffer: SourceBuffer | null = null;
 
+      function processQueue() {
+        if (!sourceBuffer || sourceBuffer.updating) return;
+        const nextFrame = frameQueueRef.current.shift();
+        if (nextFrame) {
+          if (nextFrame instanceof Blob) {
+            nextFrame.arrayBuffer().then((arrayBuffer) => {
+              if (sourceBuffer) {
+                try {
+                  sourceBuffer.appendBuffer(arrayBuffer);
+                } catch (err) {
+                  console.log("$$$$$ Error appending buffer:", err);
+                }
+              }
+            });
+          } else {
+            if (sourceBuffer) {
+              try {
+                sourceBuffer.appendBuffer(nextFrame);
+              } catch (err) {
+                console.log("$$$$$ Error appending buffer:", err);
+              }
+            }
+          }
+        }
+      }
+
       mediaSource.addEventListener("sourceopen", () => {
         // Wait for codec info from WebSocket before creating SourceBuffer
       });
@@ -817,7 +745,7 @@ export function useStream(
                   !isLive && !optionRef.current.smallClip && handleAutoPause();
                   processQueue();
                   isLive && seekVideoToCurrentTime();
-                  videoStateRef.current.direction === "forward" && monitorBuffUsage();
+                  monitorBuffUsage();
                 });
               } catch (err) {
                 console.log(
@@ -834,13 +762,12 @@ export function useStream(
             stop();
             return;
           } else if (data instanceof Array) {
-            !!!startTimeRef.current &&
-              (startTimeRef.current = data[0].timeStamp);
-            metaDataRef.current = [...metaDataRef.current, ...data];
-            // if (metaDataRef.current.length > 50){
-            //   metaDataRef.current = metaDataRef.current.slice(-50);
-            // }
-            // data.map(element => console.log("$$$$$=====", element.timeStamp))
+            !startTimeRef.current && (startTimeRef.current = data[0].timeStamp);
+            const dataObj = data.reduce((acc, item) => {
+              acc[item.timeStampEncoded] = item;
+              return acc;
+            }, {})
+            metaDataRef.current = {...metaDataRef.current, ...dataObj};
           }
           return;
         }
@@ -917,73 +844,23 @@ export function useStream(
   }, [videoStates.isPlaying]);
 
   // handle playback rate change and on backward also
-  const reverseIntervalIdRef = useRef<ReturnType<typeof setInterval>>(null);
-
-  const handlePreviousStream = useCallback(() => {
-    if (backFrameQueueRef.current.length < 1){
-      waitingForPrevDataRef.current = true;
-      return;
-    }
-
-    frameQueueRef.current = backFrameQueueRef.current;
-    const buffered = sourceBufferRef.current?.buffered;
-    if (buffered && buffered.length > 0){
-      sourceBufferRef.current?.remove(0, buffered.end(buffered.length - 1));
-    }
-
-    const promise = new Promise((resolve, reject) => {
-      resolveRef.current = resolve;
-      rejectRef.current = reject;
-      processQueue();
-      waitingForPrevDataRef.current = false;
-    })
-
-
-    promise.then(() => {
-      if (videoRef.current){
-        startTimeRef.current = backStartTimeRef.current;
-        metaDataRef.current = backMetaDataRef.current;
-        const buffered = sourceBufferRef.current?.buffered;
-        if (buffered && buffered.length > 0){
-          const endTime = buffered.end(buffered.length - 1);
-          videoRef.current.currentTime = endTime;
-          const intervalId = setInterval(
-            reversePlay,
-            1000 / (fps * videoStates.playbackRate)
-          );
-          reverseIntervalIdRef.current = intervalId;
-          preFetchCalledRef.current = false;
-        }
-      }
-    })
-    .catch((error) => console.log("$$$$$===== Failed to push all frames =====$$$$$", error.message));
-  }, [])
-
-  function reversePlay() {
-    const buffered = sourceBufferRef.current?.buffered;
-    if (buffered && buffered.length > 0 && videoRef.current){
-      const start = buffered.start(0);
-      const toBeTime = videoRef.current.currentTime - (1 / fps);
-      const finalTime = Math.max(start, toBeTime);
-      videoRef.current.currentTime = finalTime;
-      if (finalTime === start && reverseIntervalIdRef.current){
-        clearInterval(reverseIntervalIdRef.current);
-        reverseIntervalIdRef.current = null;
-        handlePreviousStream();
-      }
-    }
-  }
-
   useEffect(() => {
     let intervalId: any = null;
     const isForward = videoStates.direction === "forward";
+    function reversePlay() {
+      if (videoRef.current && videoRef.current.currentTime > 0)
+        videoRef.current.currentTime -= 1 / fps;
+      else {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }
     if (videoRef.current && !isForward) {
       videoRef.current.pause();
       intervalId = setInterval(
         reversePlay,
         1000 / (fps * videoStates.playbackRate)
       );
-      reverseIntervalIdRef.current = intervalId;
     } else {
       if (videoRef.current) {
         videoRef.current.play();
@@ -999,43 +876,10 @@ export function useStream(
     };
   }, [videoStates.playbackRate, videoStates.direction]);
 
-  const fetchPrevData = useCallback(() => {
-    softStop();
-    const buffered = sourceBufferRef.current?.buffered;
-    if (buffered && buffered.length > 0){
-      preFetchCalledRef.current = true;
-      const start = buffered.start(0);
-      loadPrevData(Math.floor((start * 1000) + startTimeRef.current), optionRef.current)
-      .then(data => {
-        console.log("$$$$$=====^^^^^", data);
-        backFrameQueueRef.current = data.frameQueue;
-        backStartTimeRef.current = data.startTime;
-        backMetaDataRef.current = data.metaData;
-        if (waitingForPrevDataRef.current){
-          handlePreviousStream();
-        }
-      })
-      .catch(error => console.log("$$$$$===== data prefetch error =====$$$$$"));
-    }
-  }, [])
-
-  // fetch backward data on switch to reverse mode
-  useEffect(() => {
-    if (videoStates.direction === 'backward'){
-      fetchPrevData();
-    }
-
-    return () => {
-      backFrameQueueRef.current = [];
-      backMetaDataRef.current = [];
-      backStartTimeRef.current = 0;
-    }
-  }, [videoStates.direction, fetchPrevData])
-
   // clear retry handler interval on unmount
   useEffect(() => {
     return () => {
-      console.log("$$$$$===== removed");
+      // console.log("$$$$$===== removed");
       clrRetryInterval();
       clrTimeout();
       clrAutoReplay();

@@ -11,7 +11,7 @@ export default function Home() {
     siteId: 1,
     channelId: 16,
     timestamp: 0,
-    streamType: 1 as 0 | 1,
+    streamType: 0 as 0 | 1,
   });
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -52,7 +52,7 @@ export default function Home() {
           </div>
         }
         <Frames frameInfo={currentFrameMetadata} isEvent={false} svgRef={svgRef} videoRef={videoRef} />
-        <video ref={videoRef} className="absolute top-0 right-0 bottom-0 left-0 object-contain h-full w-full" autoPlay muted />
+        <video ref={videoRef} className="absolute top-0 right-0 bottom-0 left-0 object-contain h-full w-full" autoPlay muted controls />
       </div>
       <div>
         <p>{currentFrameMetadata?.timeStamp ? moment(currentFrameMetadata?.timeStamp).format("YYYY-MM-DD HH:mm:ss") : ""}</p>
