@@ -174,7 +174,7 @@ export default function LoadTest() {
             {Array.from({ length: formData.grid * formData.grid }, (_, i) => (
               <div
                 key={i}
-                className="bg-white rounded-lg shadow-md flex items-center justify-center overflow-hidden"
+                className="bg-white rounded-lg shadow-md flex items-center justify-center overflow-hidden relative"
               >
                 <Grid formData={formData} startStream={start} />
               </div>

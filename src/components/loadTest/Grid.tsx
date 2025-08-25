@@ -24,6 +24,6 @@ export default function Grid({ formData, startStream }: { formData: FormData, st
     }, [formData, startStream])
 
   return (
-    <video ref={videoRef} autoPlay muted controls={false} className="bg-red-100 left-0 w-full h-full object-contain"/>
+    <video ref={videoRef} autoPlay muted controls={false} className="bg-red-100 left-0 absolute top-0 start-0 end-0 bottom-0 h-full w-full object-contain"/>
   )
 }
