@@ -143,7 +143,7 @@ export default function LoadTest() {
         </div>
         <div className="flex flex-row items-center gap-5 p-3 w-full bg-slate-200">
           <div className="flex flex-row items-center gap-1">
-            <label htmlFor="timestamp">Start Timestamp:</label>
+            <label htmlFor="timestamp">Throttle Time In Seconds:</label>
             <input
               type="number"
               name="timestamp"
