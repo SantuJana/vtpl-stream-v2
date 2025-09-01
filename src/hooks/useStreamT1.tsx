@@ -12,6 +12,7 @@ export interface ConnOption {
   retry?: boolean;
   smallClip?: boolean;
   seekTimestamp?: number;
+  wsUrl?: string;
 }
 
 type UseStreamReturn = {
@@ -165,7 +166,8 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
   }, []);
 
   const prepareConnectionString = useCallback((option: ConnOption) => {
-    const BASE_STREAM_URL = "ws://172.16.1.16:8083";
+    const BASE_STREAM_URL = option.wsUrl;
+    // const BASE_STREAM_URL = "ws://172.16.1.16:8083";
     // const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
 
     let isLive = 1;

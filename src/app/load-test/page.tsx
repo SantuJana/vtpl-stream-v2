@@ -8,6 +8,7 @@ export type FormData = {
   channelId: number;
   timestamp: number;
   grid: number;
+  wsUrl: string;
 };
 
 const initFormData = {
@@ -15,6 +16,7 @@ const initFormData = {
   channelId: 16,
   timestamp: 0,
   grid: 1,
+  wsUrl: "",
 };
 
 export default function LoadTest() {
@@ -143,6 +145,19 @@ export default function LoadTest() {
           </button>
         </div>
         <div className="flex flex-row items-center gap-5 p-3 w-full bg-slate-200">
+          <div className="flex flex-row items-center gap-1">
+            <label htmlFor="timestamp">Stream Socket server Url<span className="text-red-600">*</span>:</label>
+            <input
+              type="text"
+              name="wsUrl"
+              id="wsUrl"
+              value={formData.wsUrl}
+              onChange={handleFormDataChange}
+              className="border p-1 rounded min-w-lg"
+              placeholder="eg: ws://172.16.1.16:8083"
+              required
+            />
+          </div>
           <div className="flex flex-row items-center gap-1">
             <label htmlFor="timestamp">Throttle Time In Seconds:</label>
             <input

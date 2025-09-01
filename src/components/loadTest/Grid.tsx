@@ -32,7 +32,8 @@ export default function Grid({ formData, startStream }: { formData: FormData, st
               siteId: formDataLoc.siteIdLoc || formData.siteId,
               channelId: formDataLoc.channelIdLoc || formData.channelId,
               timestamp: formData.timestamp,
-              streamType: 0
+              streamType: 0,
+              wsUrl: formData.wsUrl,
           }
 
           start(option);
