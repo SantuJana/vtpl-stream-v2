@@ -11,8 +11,8 @@ export type FormData = {
 };
 
 const initFormData = {
-  siteId: 16,
-  channelId: 35,
+  siteId: 1,
+  channelId: 16,
   timestamp: 0,
   grid: 1,
 };
@@ -63,6 +63,7 @@ export default function LoadTest() {
     };
     if (intervalRef.current || timeoutRef.current) return;
     clearTimeoutOrInterval();
+    setStart(true);
     intervalRef.current = setInterval(() => {
       setStart(false);
       timeoutRef.current = setTimeout(() => setStart(true), 2000);

@@ -1,4 +1,4 @@
-import React, { RefObject, useCallback, useEffect, useRef } from "react";
+import React, { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { v4 } from "uuid";
 
 export interface ConnOption {
@@ -17,6 +17,7 @@ export interface ConnOption {
 type UseStreamReturn = {
   start: (option: ConnOption) => void;
   stop: () => void;
+  loading: boolean;
 };
 
 export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseStreamReturn {
@@ -27,6 +28,7 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
     const runtimeCheckingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const optionRef = useRef<ConnOption>({ siteId: 0, channelId: 0 });
     const lastFrameTimeRef = useRef<number | null>(null);
+    const [loading, setLoading] = useState<boolean>(false);
 
   const app = 0;
   const cloudIp = "<videoneticsAddr>";
@@ -121,6 +123,7 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
   }, [clearRuntimeCheck])
 
   const handleOnLoadedData = useCallback(() => {
+    setLoading(false);
     lastFrameTimeRef.current = null;
     clearTimeoutCheck();
     addRuntimeChecking();
@@ -162,7 +165,8 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
   }, []);
 
   const prepareConnectionString = useCallback((option: ConnOption) => {
-    const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
+    const BASE_STREAM_URL = "ws://172.16.1.16:8083";
+    // const BASE_STREAM_URL = "wss://vsaasstreaming1.videonetics.com";
 
     let isLive = 1;
 
@@ -211,6 +215,7 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
 
   const start = useCallback((option: ConnOption) => {
     stop();
+    setLoading(true);
     optionRef.current = option;
     const wsUrl = prepareConnectionString(option);
 
@@ -290,5 +295,5 @@ export function useStreamT1(videoRef: RefObject<HTMLVideoElement | null>): UseSt
     };
   }, [])
 
-  return { stop, start };
+  return { stop, start, loading };
 }
