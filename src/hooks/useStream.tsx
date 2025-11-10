@@ -37,8 +37,8 @@ export interface ConnOption {
   channelId: number;
   timestamp?: number;
   endTimestamp?: number;
-  jobId?: number;
-  eventId?: number;
+  jobId?: string | null;
+  eventId?: string | null;
   streamType?: 0 | 1;
   retry?: boolean;
   smallClip?: boolean;
@@ -664,6 +664,8 @@ export function useStream(
       (timestamp || 0) +
       "/" +
       sessionId;
+
+    console.log("#####=====", jobId, eventId)
 
     if (jobId && eventId) {
       name = name + "/" + jobId + "/" + eventId;

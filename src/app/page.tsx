@@ -8,10 +8,12 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [option, setOption] = useState({
-    siteId: 1,
-    channelId: 16,
-    timestamp: 0,
+    siteId: 16,
+    channelId: 35,
+    timestamp: 1759924697503,
     streamType: 0 as 0 | 1,
+    jobId: "-1",
+    eventId: "68e6524816219203"
   });
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -104,6 +106,10 @@ export default function Home() {
           <input type="number" name="channelId" id="" value={option.channelId} className="ring-1" onChange={handleOptionChange} />
           <label htmlFor="channel">Timestamp:</label>
           <input type="number" name="timestamp" id="" value={option.timestamp} className="ring-1" onChange={handleOptionChange} />
+          <label htmlFor="channel">Job Id:</label>
+          <input type="text" name="jobId" id="" value={option.jobId || ""} className="ring-1" onChange={handleOptionChange} />
+          <label htmlFor="channel">Event Id:</label>
+          <input type="text" name="eventId" id="" value={option.eventId || ""} className="ring-1" onChange={handleOptionChange} />
           <button className="bg-sky-400 mt-2 cursor-pointer" onClick={handleStart}>Start</button>
           <button className="bg-slate-400 mt-2 cursor-pointer" onClick={handleStop}>Stop</button>
         </div>
